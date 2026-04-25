@@ -17,14 +17,40 @@ from auto_cut import Config, run_pipeline
 
 
 SETTINGS = [
-    ("target_minutes",   "Target length (min)",  20.0,  "최종 영상 목표 길이"),
-    ("rms_percentile",   "RMS percentile",       70.0,  "교전 임계값 (낮출수록 더 많이 잡힘)"),
-    ("min_loud",         "Min loud (sec)",        3.0,  "이 시간 이상 시끄러워야 교전으로 인정"),
-    ("merge_gap",        "Merge gap (sec)",       3.0,  "이 간격 이내 클립끼리 병합"),
-    ("min_clip",         "Min clip (sec)",        5.0,  "이보다 짧으면 버림"),
-    ("pad_before",       "Pad before (sec)",      2.0,  "클립 앞 여유"),
-    ("pad_after",        "Pad after (sec)",       3.0,  "클립 뒤 여유"),
-    ("scene_threshold",  "Scene threshold",      27.0,  "장면 전환 민감도 (낮을수록 많이 잡힘)"),
+    ("target_minutes",   "Target length (min)",  20.0,
+     "최종 영상 길이 (분)\n"
+     "클립 합계가 이 값을 넘으면 에너지(소리) 높은 순으로 잘려나감.\n"
+     "예: 20 = 최종 20분짜리 영상 목표."),
+    ("rms_percentile",   "RMS percentile",       70.0,
+     "교전 임계값 (퍼센타일, 0~100)\n"
+     "오디오 RMS의 이 분위수보다 큰 구간을 '교전'으로 판단.\n"
+     "낮출수록 더 많은 구간 후보 (60: 잔잔한 부분도 포함).\n"
+     "높일수록 큰 굉음만 (80: 폭발·강력한 총격만)."),
+    ("min_loud",         "Min loud (sec)",        3.0,
+     "교전 최소 지속 시간 (초)\n"
+     "시끄러운 구간이 이 시간 이상 지속되어야 클립 후보로 인정.\n"
+     "낮추면 짧은 단발성 소리(수류탄 한 발 등)도 잡힘."),
+    ("merge_gap",        "Merge gap (sec)",       3.0,
+     "클립 병합 간격 (초)\n"
+     "두 클립 사이 간격이 이 값보다 작으면 하나로 합침.\n"
+     "자잘한 컷이 너무 많으면 키움. 컷이 너무 길게 합쳐지면 줄임."),
+    ("min_clip",         "Min clip (sec)",        5.0,
+     "최소 클립 길이 (초)\n"
+     "이보다 짧은 클립은 결과에서 제외.\n"
+     "자잘한 컷 정리에 효과적."),
+    ("pad_before",       "Pad before (sec)",      2.0,
+     "앞 여유 (초)\n"
+     "각 클립 시작 전에 추가하는 여유분.\n"
+     "교전 직전 분위기·진입 구간을 살리고 싶으면 키움."),
+    ("pad_after",        "Pad after (sec)",       3.0,
+     "뒤 여유 (초)\n"
+     "각 클립 끝에 추가하는 여유분.\n"
+     "교전 마무리·정리 구간을 보여주고 싶으면 키움."),
+    ("scene_threshold",  "Scene threshold",      27.0,
+     "장면 전환 민감도\n"
+     "낮을수록 화면 변화에 민감해 더 많은 장면 경계를 잡음 (예: 20).\n"
+     "높일수록 큰 변화만 장면으로 인정 (예: 35).\n"
+     "라운드 리셋·메뉴 화면이 잘 안 잡히면 낮추기."),
 ]
 
 VIDEO_TYPES = [
@@ -74,12 +100,14 @@ class App(tk.Tk):
             cell = ttk.Frame(settings)
             cell.grid(row=r, column=c, sticky="ew", padx=8, pady=4)
             settings.grid_columnconfigure(c, weight=1)
-            ttk.Label(cell, text=label, width=20).pack(side="left")
+            lbl = ttk.Label(cell, text=label, width=20, cursor="question_arrow")
+            lbl.pack(side="left")
             var = tk.DoubleVar(value=default)
             self.setting_vars[key] = var
             entry = ttk.Entry(cell, textvariable=var, width=10)
             entry.pack(side="left")
-            self._tooltip(entry, tip)
+            for w in (lbl, entry):
+                self._tooltip(w, tip)
 
         # Buttons
         row = ttk.Frame(self)
@@ -104,10 +132,11 @@ class App(tk.Tk):
         ttk.Label(self, textvariable=self.status, anchor="w",
                   relief="sunken").pack(fill="x", side="bottom")
 
-    def _tooltip(self, widget: tk.Widget, text: str) -> None:
+    def _tooltip(self, widget: tk.Widget, text: str, delay_ms: int = 400) -> None:
         tip: tk.Toplevel | None = None
+        scheduled: str | None = None
 
-        def show(_event=None):
+        def show():
             nonlocal tip
             if tip is not None:
                 return
@@ -115,18 +144,31 @@ class App(tk.Tk):
             y = widget.winfo_rooty() + widget.winfo_height() + 4
             tip = tk.Toplevel(widget)
             tip.wm_overrideredirect(True)
+            tip.wm_attributes("-topmost", True)
             tip.wm_geometry(f"+{x}+{y}")
-            ttk.Label(tip, text=text, background="#ffffe0",
-                      relief="solid", borderwidth=1, padding=4).pack()
+            ttk.Label(
+                tip, text=text, background="#ffffe0",
+                foreground="#222", relief="solid", borderwidth=1,
+                padding=(8, 6), justify="left", wraplength=420,
+            ).pack()
 
-        def hide(_event=None):
-            nonlocal tip
+        def schedule(_event=None):
+            nonlocal scheduled
+            cancel()
+            scheduled = widget.after(delay_ms, show)
+
+        def cancel(_event=None):
+            nonlocal scheduled, tip
+            if scheduled is not None:
+                widget.after_cancel(scheduled)
+                scheduled = None
             if tip is not None:
                 tip.destroy()
                 tip = None
 
-        widget.bind("<Enter>", show)
-        widget.bind("<Leave>", hide)
+        widget.bind("<Enter>", schedule)
+        widget.bind("<Leave>", cancel)
+        widget.bind("<ButtonPress>", cancel)
 
     def _pick_video(self) -> None:
         path = filedialog.askopenfilename(title="Select video", filetypes=VIDEO_TYPES)
