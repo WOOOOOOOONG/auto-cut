@@ -214,6 +214,18 @@ class App(tk.Tk):
         ttk.Entry(row, textvariable=self.script_past_dir_var).pack(side="left", fill="x", expand=True, padx=4)
         ttk.Button(row, text="폴더...", command=self._pick_past_scripts_dir).pack(side="left")
 
+        row = ttk.Frame(parent)
+        row.pack(fill="x", **pad)
+        ttk.Label(row, text="", width=14).pack(side="left")  # spacer
+        hint = ttk.Label(
+            row,
+            text="↳ 지원 형식: .txt, .md  (PDF는 옆 버튼으로 변환 후 사용)",
+            foreground="#666",
+        )
+        hint.pack(side="left")
+        ttk.Button(row, text="PDF → TXT 변환",
+                   command=self._convert_pdfs).pack(side="right")
+
         # Multi-line video context
         ctx_frame = ttk.LabelFrame(parent, text="이번 영상 정보 (게임·주제·방향·살리고 싶은 느낌)")
         ctx_frame.pack(fill="both", expand=True, **pad)
@@ -440,6 +452,24 @@ class App(tk.Tk):
         self._start_worker(worker)
 
     # ----- Script pipeline --------------------------------------------
+
+    def _convert_pdfs(self) -> None:
+        folder = self.script_past_dir_var.get().strip()
+        if not folder or not Path(folder).exists():
+            messagebox.showerror("auto-cut", "먼저 '과거 대본 폴더'를 선택하세요.")
+            return
+        self._append_log(f"\n=== PDF → TXT 변환: {folder} ===")
+        self.status.set("변환 중...")
+
+        def worker() -> None:
+            try:
+                auto_script.convert_pdfs_to_txt(Path(folder), log=self._log)
+            except Exception as e:  # noqa: BLE001
+                self._log(f"오류: {e}")
+            finally:
+                self.log_queue.put(None)
+
+        self._start_worker(worker)
 
     def _check_deps(self) -> None:
         self.script_check_btn.configure(state="disabled")
