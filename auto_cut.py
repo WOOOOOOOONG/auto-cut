@@ -62,13 +62,41 @@ def probe(video: Path) -> tuple[float, float]:
     return duration, fps
 
 
+def count_audio_streams(video: Path) -> int:
+    """Return the number of audio streams in the video."""
+    out = run([
+        "ffprobe", "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0", str(video),
+    ]).stdout.decode("utf-8", errors="ignore")
+    return len([line for line in out.strip().splitlines() if line.strip()])
+
+
 def extract_audio_rms(video: Path, window_sec: float = 1.0) -> np.ndarray:
-    """Stream mono PCM through ffmpeg and return per-window RMS array."""
-    cmd = [
-        "ffmpeg", "-v", "error", "-i", str(video),
-        "-ac", "1", "-ar", str(SAMPLE_RATE),
-        "-f", "s16le", "-",
-    ]
+    """Stream mono PCM through ffmpeg and return per-window RMS array.
+
+    OBS, Shadowplay, etc. often record multiple audio tracks (game, mic,
+    desktop, voice chat) and ffmpeg's default stream selection may pick
+    a silent one. We mix every audio stream so the loud track always
+    contributes regardless of order.
+    """
+    n_streams = count_audio_streams(video)
+    if n_streams == 0:
+        raise RuntimeError("영상에 오디오 트랙이 없습니다.")
+
+    cmd = ["ffmpeg", "-v", "error", "-i", str(video)]
+    if n_streams > 1:
+        inputs = "".join(f"[0:a:{i}]" for i in range(n_streams))
+        # normalize=0 keeps each input at full volume so a silent track
+        # doesn't pull the loud track's level down.
+        cmd += [
+            "-filter_complex",
+            f"{inputs}amix=inputs={n_streams}:duration=longest:normalize=0[a]",
+            "-map", "[a]",
+        ]
+    cmd += ["-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
+
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     raw = proc.stdout.read()
     proc.wait()
@@ -268,10 +296,13 @@ def run_pipeline(
         fps = config.fps_override
     log(f"      길이 {duration:.1f}초 / fps {fps:.3f}")
 
-    log("[2/5] 오디오 추출\u00b7RMS 계산 중...")
+    n_audio = count_audio_streams(video)
+    log(f"[2/5] 오디오 추출·RMS 계산 중... (트랙 {n_audio}개 모두 믹스)")
     with _ticker(log, "오디오 분석"):
         rms = extract_audio_rms(video)
     log(f"      윈도우 {len(rms)}개  평균 {rms.mean():.4f}  최대 {rms.max():.4f}")
+    if rms.max() < 0.001:
+        log("      ⚠ 경고: 오디오가 거의 묵음입니다. 게임 사운드가 정말 없는지 확인 필요.")
 
     log("[3/5] 교전 구간 감지 중...")
     regions = detect_combat_regions(rms, config.rms_percentile, config.min_loud)
