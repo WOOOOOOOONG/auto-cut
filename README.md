@@ -2,7 +2,7 @@
 
 게임 녹화 영상에서 교전 구간과 라운드 경계를 자동으로 감지해 DaVinci Resolve용 EDL을 생성한다.
 
-**현재 버전**: v1.0.0 (CLI 전용)
+**현재 버전**: v1.1.0 (CLI + GUI)
 
 ## 동작 원리
 
@@ -23,7 +23,7 @@
 
 ```bash
 # Ubuntu 24.04 기준 (PEP 668 준수)
-sudo apt install ffmpeg python3-venv
+sudo apt install ffmpeg python3-venv python3-tk   # tk는 GUI용
 
 git clone https://github.com/WOOOOOOOONG/auto-cut.git
 cd auto-cut
@@ -36,6 +36,20 @@ pip install -r requirements.txt
 이후 사용할 때마다 `source .venv/bin/activate` 후 실행.
 
 ## 사용법
+
+### GUI (권장)
+
+```bash
+python gui.py
+```
+
+- 창에서 영상 파일 선택
+- 출력 EDL 경로 자동 채워짐 (수정 가능)
+- 설정 슬라이더 조정 후 **Run** 버튼
+- 로그 영역에 진행 상황 표시
+- 완료 후 **Open output folder**로 결과 폴더 열기
+
+### CLI
 
 ```bash
 python auto_cut.py gameplay.mp4

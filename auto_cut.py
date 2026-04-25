@@ -213,66 +213,102 @@ def write_edl(clips: list[Clip], video: Path, fps: float, out: Path) -> None:
     out.write_text("\n".join(lines), encoding="utf-8")
 
 
+@dataclass
+class Config:
+    target_minutes: float = 20.0
+    rms_percentile: float = 70.0
+    min_loud: float = 3.0
+    merge_gap: float = 3.0
+    min_clip: float = 5.0
+    pad_before: float = 2.0
+    pad_after: float = 3.0
+    scene_threshold: float = 27.0
+    fps_override: float | None = None
+
+
+def run_pipeline(
+    video: Path,
+    output: Path,
+    config: Config,
+    log=print,
+) -> dict:
+    """Run the full pipeline. Returns summary dict.
+
+    `log` is called with a single string per progress message; pass a
+    custom callable from a GUI to capture output.
+    """
+    log(f"[1/5] Probing {video.name}...")
+    duration, fps = probe(video)
+    if config.fps_override:
+        fps = config.fps_override
+    log(f"      duration={duration:.1f}s  fps={fps:.3f}")
+
+    log("[2/5] Extracting audio + RMS...")
+    rms = extract_audio_rms(video)
+    log(f"      windows={len(rms)}  mean={rms.mean():.4f}  max={rms.max():.4f}")
+
+    log("[3/5] Detecting combat regions...")
+    regions = detect_combat_regions(rms, config.rms_percentile, config.min_loud)
+    log(f"      {len(regions)} regions")
+
+    log("[4/5] Detecting scene boundaries...")
+    scenes = get_scene_bounds(video, config.scene_threshold)
+    log(f"      {len(scenes)} scenes")
+
+    clips = clip_to_scenes(regions, scenes, duration)
+    clips = merge_close(clips, config.merge_gap)
+    clips = [c for c in clips if c.duration >= config.min_clip]
+    clips = pad_clips(clips, config.pad_before, config.pad_after, duration)
+    clips = trim_to_target(clips, config.target_minutes * 60.0)
+
+    total = sum(c.duration for c in clips)
+    log(f"[5/5] {len(clips)} clips, total {total/60:.1f} min")
+
+    write_edl(clips, video, fps, output)
+    log(f"      → {output}")
+
+    return {
+        "clips": len(clips),
+        "total_seconds": total,
+        "fps": fps,
+        "duration": duration,
+        "output": str(output),
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("video", type=Path, help="Input video file")
     p.add_argument("-o", "--output", type=Path, default=None,
                    help="Output EDL path (default: <input>.edl)")
-    p.add_argument("--target-minutes", type=float, default=20.0,
-                   help="Target total length in minutes (default: 20)")
-    p.add_argument("--rms-percentile", type=float, default=70.0,
-                   help="Percentile of RMS used as combat threshold (default: 70)")
-    p.add_argument("--min-loud", type=float, default=3.0,
-                   help="Minimum sustained loud seconds to count as combat (default: 3)")
-    p.add_argument("--merge-gap", type=float, default=3.0,
-                   help="Merge clips with gap below this (default: 3 sec)")
-    p.add_argument("--min-clip", type=float, default=5.0,
-                   help="Drop clips shorter than this (default: 5 sec)")
-    p.add_argument("--pad-before", type=float, default=2.0,
-                   help="Padding before each clip (default: 2 sec)")
-    p.add_argument("--pad-after", type=float, default=3.0,
-                   help="Padding after each clip (default: 3 sec)")
-    p.add_argument("--scene-threshold", type=float, default=27.0,
-                   help="PySceneDetect content threshold (default: 27)")
-    p.add_argument("--fps-override", type=float, default=None,
-                   help="Override detected fps in EDL output")
+    p.add_argument("--target-minutes", type=float, default=20.0)
+    p.add_argument("--rms-percentile", type=float, default=70.0)
+    p.add_argument("--min-loud", type=float, default=3.0)
+    p.add_argument("--merge-gap", type=float, default=3.0)
+    p.add_argument("--min-clip", type=float, default=5.0)
+    p.add_argument("--pad-before", type=float, default=2.0)
+    p.add_argument("--pad-after", type=float, default=3.0)
+    p.add_argument("--scene-threshold", type=float, default=27.0)
+    p.add_argument("--fps-override", type=float, default=None)
     args = p.parse_args()
 
-    video = args.video
-    if not video.exists():
-        print(f"error: not found: {video}", file=sys.stderr)
+    if not args.video.exists():
+        print(f"error: not found: {args.video}", file=sys.stderr)
         return 2
-    out = args.output or video.with_suffix(".edl")
+    output = args.output or args.video.with_suffix(".edl")
 
-    print(f"[1/5] Probing {video.name}...")
-    duration, fps = probe(video)
-    if args.fps_override:
-        fps = args.fps_override
-    print(f"      duration={duration:.1f}s  fps={fps:.3f}")
-
-    print("[2/5] Extracting audio + RMS...")
-    rms = extract_audio_rms(video)
-    print(f"      windows={len(rms)}  mean={rms.mean():.4f}  max={rms.max():.4f}")
-
-    print("[3/5] Detecting combat regions...")
-    regions = detect_combat_regions(rms, args.rms_percentile, args.min_loud)
-    print(f"      {len(regions)} regions")
-
-    print("[4/5] Detecting scene boundaries...")
-    scenes = get_scene_bounds(video, args.scene_threshold)
-    print(f"      {len(scenes)} scenes")
-
-    clips = clip_to_scenes(regions, scenes, duration)
-    clips = merge_close(clips, args.merge_gap)
-    clips = [c for c in clips if c.duration >= args.min_clip]
-    clips = pad_clips(clips, args.pad_before, args.pad_after, duration)
-    clips = trim_to_target(clips, args.target_minutes * 60.0)
-
-    total = sum(c.duration for c in clips)
-    print(f"[5/5] {len(clips)} clips, total {total/60:.1f} min")
-
-    write_edl(clips, video, fps, out)
-    print(f"      → {out}")
+    config = Config(
+        target_minutes=args.target_minutes,
+        rms_percentile=args.rms_percentile,
+        min_loud=args.min_loud,
+        merge_gap=args.merge_gap,
+        min_clip=args.min_clip,
+        pad_before=args.pad_before,
+        pad_after=args.pad_after,
+        scene_threshold=args.scene_threshold,
+        fps_override=args.fps_override,
+    )
+    run_pipeline(args.video, output, config)
     return 0
 
 
