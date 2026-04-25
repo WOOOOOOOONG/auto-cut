@@ -67,12 +67,44 @@ VIDEO_TYPES = [
 ]
 
 
+DEFAULT_CONTEXT_TEMPLATE = """\
+[게임 정보]
+- 게임 이름:
+- 장르 / 핵심 메커니즘: (예: 전술 FPS, 잠입, 라운드 기반)
+- 이번 영상에서 주로 보일 요소: (총격전 / 정찰 / 인질 구출 등)
+
+[이번 영상 주제]
+- 한 줄 요약:
+- 미션·라운드·맵 이름:
+- 핵심 사건 / 전환점: (예: 중반에 예상 못한 적 등장, 마지막에 실수로 사망)
+
+[톤 · 스타일]
+- 평소 분위기: (예: 가볍고 자조적, 진지한 분석 위주, 경박한 농담 많이)
+- 이 영상에서 강조할 느낌: (예: 긴장감 / 코미디 / 카타르시스)
+- 시청자 호칭: (예: 여러분 / 너희들 / 친구들)
+
+[살리고 싶은 포인트]
+- 특히 부각할 컷·순간:
+- 절대 빼면 안 되는 멘트:
+- 피하고 싶은 것: (예: 욕설, 스포일러, 특정 표현)
+
+[형식]
+- 인트로 멘트 방향: (예: "오늘은 ~"으로 시작)
+- 아웃트로 멘트 방향: (예: 다음 편 예고 / 구독 부탁)
+- 컷 사이 연결: (예: 사건의 흐름대로 / 감정 변화 따라가기)
+
+[기타 / 인사이드 조크]
+- 자주 쓰는 표현 · 밈:
+- 이 채널 고유의 러닝 개그·테마:
+"""
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("auto-cut")
-        self.geometry("780x780")
-        self.minsize(720, 700)
+        self.geometry("820x900")
+        self.minsize(740, 760)
 
         # Cut tab state
         self.video_var = tk.StringVar()
@@ -182,14 +214,16 @@ class App(tk.Tk):
 
         # Multi-line video context
         ctx_frame = ttk.LabelFrame(parent, text="이번 영상 정보 (게임·주제·방향·살리고 싶은 느낌)")
-        ctx_frame.pack(fill="both", expand=False, **pad)
-        self.script_context_text = tk.Text(ctx_frame, height=6, wrap="word",
+        ctx_frame.pack(fill="both", expand=True, **pad)
+        ctx_inner = ttk.Frame(ctx_frame)
+        ctx_inner.pack(fill="both", expand=True, padx=4, pady=4)
+        self.script_context_text = tk.Text(ctx_inner, height=12, wrap="word",
                                            font=("Consolas", 10))
-        self.script_context_text.pack(fill="both", expand=True, padx=4, pady=4)
-        self.script_context_text.insert("1.0",
-            "예) 게임: Ready or Not / 분위기: 잠입 위주, 긴장감 살리기\n"
-            "    이번 미션 주제: 마약상 거래 현장 급습\n"
-            "    톤: 평소처럼 자조적·짧은 농담 섞기\n")
+        ctx_sb = ttk.Scrollbar(ctx_inner, command=self.script_context_text.yview)
+        self.script_context_text.configure(yscrollcommand=ctx_sb.set)
+        self.script_context_text.pack(side="left", fill="both", expand=True)
+        ctx_sb.pack(side="right", fill="y")
+        self.script_context_text.insert("1.0", DEFAULT_CONTEXT_TEMPLATE)
 
         row = ttk.Frame(parent)
         row.pack(fill="x", **pad)

@@ -94,6 +94,17 @@ def parse_edl(path: Path, fps: float) -> list[Clip]:
 # ---------- Dependency check / install -----------------------------------
 
 
+_NODE_DIRS_WIN = [
+    r"C:\Program Files\nodejs",
+    r"C:\Program Files (x86)\nodejs",
+    os.path.expanduser(r"~\AppData\Local\Programs\nodejs"),
+]
+
+_NPM_GLOBAL_DIRS_WIN = [
+    os.path.expanduser(r"~\AppData\Roaming\npm"),
+]
+
+
 def _which(cmd: str) -> str | None:
     """shutil.which but also probes Windows .cmd/.bat shims."""
     p = shutil.which(cmd)
@@ -107,12 +118,50 @@ def _which(cmd: str) -> str | None:
     return None
 
 
+def _refresh_node_path() -> None:
+    """Prepend Node.js + global-npm dirs to os.environ['PATH'].
+
+    winget installs Node.js into the user/machine PATH, but our running
+    Python process won't pick that up until restart. Manually add the
+    well-known dirs so subsequent subprocess calls can find node, npm,
+    and globally-installed CLIs (claude).
+    """
+    if os.name != "nt":
+        return
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep)
+    additions = []
+    for d in _NODE_DIRS_WIN + _NPM_GLOBAL_DIRS_WIN:
+        if d and os.path.isdir(d) and d not in parts:
+            additions.append(d)
+    if additions:
+        os.environ["PATH"] = os.pathsep.join(additions + parts)
+
+
+def _find_executable(cmd: str, extra_dirs: list[str] | None = None) -> str | None:
+    """Find cmd in PATH or in known Node/npm install dirs."""
+    p = _which(cmd)
+    if p:
+        return p
+    if os.name == "nt":
+        suffixes = ["", ".cmd", ".bat", ".exe"]
+        candidates = list(_NODE_DIRS_WIN) + list(_NPM_GLOBAL_DIRS_WIN) + (extra_dirs or [])
+        for d in candidates:
+            for s in suffixes:
+                full = os.path.join(d, cmd + s)
+                if os.path.isfile(full):
+                    return full
+    return None
+
+
 def check_node() -> str | None:
-    if _which("node") is None:
+    _refresh_node_path()
+    exe = _find_executable("node")
+    if exe is None:
         return None
     try:
         r = subprocess.run(
-            ["node", "--version"], capture_output=True, text=True, timeout=5,
+            [exe, "--version"], capture_output=True, text=True, timeout=5,
         )
         if r.returncode == 0:
             return r.stdout.strip()
@@ -122,11 +171,13 @@ def check_node() -> str | None:
 
 
 def check_claude() -> str | None:
-    if _which("claude") is None:
+    _refresh_node_path()
+    exe = _find_executable("claude")
+    if exe is None:
         return None
     try:
         r = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, timeout=10,
+            [exe, "--version"], capture_output=True, text=True, timeout=10,
             shell=(os.name == "nt"),
         )
         if r.returncode == 0:
@@ -165,13 +216,15 @@ def install_nodejs(log) -> bool:
 
 def install_claude_code(log) -> bool:
     """Install Claude Code globally via npm. Returns True on success."""
-    if _which("npm") is None:
-        log("npm을 찾을 수 없음. Node.js 설치 후 GUI 재시작 필요.")
+    _refresh_node_path()
+    npm = _find_executable("npm")
+    if npm is None:
+        log("npm을 찾을 수 없음. Node.js 설치 확인 또는 GUI 재시작 필요.")
         return False
-    log("Claude Code 설치 중 (npm install -g @anthropic-ai/claude-code)...")
+    log(f"Claude Code 설치 중 (npm: {npm})...")
     try:
         r = subprocess.run(
-            ["npm", "install", "-g", "@anthropic-ai/claude-code"],
+            [npm, "install", "-g", "@anthropic-ai/claude-code"],
             capture_output=True, text=True, timeout=600,
             shell=(os.name == "nt"),
         )
@@ -302,11 +355,13 @@ def build_prompt(
 
 def call_claude(prompt: str, log=print, timeout: int = 1800) -> str:
     """Spawn `claude -p` and feed prompt via stdin. Returns stdout text."""
-    if check_claude() is None:
-        raise RuntimeError("Claude Code가 PATH에 없습니다.")
+    _refresh_node_path()
+    claude_exe = _find_executable("claude")
+    if claude_exe is None:
+        raise RuntimeError("Claude Code 실행 파일을 찾을 수 없습니다.")
 
     proc = subprocess.Popen(
-        ["claude", "-p"],
+        [claude_exe, "-p"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
