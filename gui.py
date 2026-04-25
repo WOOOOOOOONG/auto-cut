@@ -81,19 +81,19 @@ class App(tk.Tk):
         # Input video
         row = ttk.Frame(self)
         row.pack(fill="x", **pad)
-        ttk.Label(row, text="Video", width=12).pack(side="left")
+        ttk.Label(row, text="Video / 영상", width=14).pack(side="left")
         ttk.Entry(row, textvariable=self.video_var).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row, text="Browse...", command=self._pick_video).pack(side="left")
+        ttk.Button(row, text="찾기...", command=self._pick_video).pack(side="left")
 
         # Output EDL
         row = ttk.Frame(self)
         row.pack(fill="x", **pad)
-        ttk.Label(row, text="Output EDL", width=12).pack(side="left")
+        ttk.Label(row, text="Output / 출력 EDL", width=14).pack(side="left")
         ttk.Entry(row, textvariable=self.output_var).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row, text="Browse...", command=self._pick_output).pack(side="left")
+        ttk.Button(row, text="저장 위치...", command=self._pick_output).pack(side="left")
 
         # Settings frame (2 columns)
-        settings = ttk.LabelFrame(self, text="Settings")
+        settings = ttk.LabelFrame(self, text="Settings / 설정")
         settings.pack(fill="x", **pad)
         for i, (key, label, default, tip) in enumerate(SETTINGS):
             r, c = divmod(i, 2)
@@ -112,13 +112,13 @@ class App(tk.Tk):
         # Buttons
         row = ttk.Frame(self)
         row.pack(fill="x", **pad)
-        self.run_btn = ttk.Button(row, text="Run", command=self._run)
+        self.run_btn = ttk.Button(row, text="실행 (Run)", command=self._run)
         self.run_btn.pack(side="left", padx=4)
-        ttk.Button(row, text="Reset settings", command=self._reset).pack(side="left", padx=4)
-        ttk.Button(row, text="Open output folder", command=self._open_output_dir).pack(side="left", padx=4)
+        ttk.Button(row, text="기본값으로", command=self._reset).pack(side="left", padx=4)
+        ttk.Button(row, text="결과 폴더 열기", command=self._open_output_dir).pack(side="left", padx=4)
 
         # Log
-        log_frame = ttk.LabelFrame(self, text="Log")
+        log_frame = ttk.LabelFrame(self, text="Log / 로그")
         log_frame.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(log_frame, wrap="none", height=12, state="disabled",
                            font=("Consolas", 10))
@@ -128,7 +128,7 @@ class App(tk.Tk):
         self.log.configure(yscrollcommand=sb.set)
 
         # Status bar
-        self.status = tk.StringVar(value="Ready.")
+        self.status = tk.StringVar(value="준비됨.")
         ttk.Label(self, textvariable=self.status, anchor="w",
                   relief="sunken").pack(fill="x", side="bottom")
 
@@ -171,7 +171,7 @@ class App(tk.Tk):
         widget.bind("<ButtonPress>", cancel)
 
     def _pick_video(self) -> None:
-        path = filedialog.askopenfilename(title="Select video", filetypes=VIDEO_TYPES)
+        path = filedialog.askopenfilename(title="영상 선택", filetypes=VIDEO_TYPES)
         if not path:
             return
         self.video_var.set(path)
@@ -180,7 +180,7 @@ class App(tk.Tk):
 
     def _pick_output(self) -> None:
         path = filedialog.asksaveasfilename(
-            title="Save EDL as", defaultextension=".edl",
+            title="EDL 저장 위치", defaultextension=".edl",
             filetypes=[("EDL", "*.edl"), ("All files", "*.*")],
         )
         if path:
@@ -225,16 +225,16 @@ class App(tk.Tk):
 
     def _on_done(self) -> None:
         self.run_btn.configure(state="normal")
-        self.status.set("Done.")
+        self.status.set("완료.")
 
     def _run(self) -> None:
         video = self.video_var.get().strip()
         output = self.output_var.get().strip()
         if not video:
-            messagebox.showerror("auto-cut", "Pick a video first.")
+            messagebox.showerror("auto-cut", "먼저 영상을 선택하세요.")
             return
         if not Path(video).exists():
-            messagebox.showerror("auto-cut", f"Video not found:\n{video}")
+            messagebox.showerror("auto-cut", f"영상을 찾을 수 없습니다:\n{video}")
             return
         if not output:
             output = str(Path(video).with_suffix(".edl"))
@@ -243,12 +243,12 @@ class App(tk.Tk):
         try:
             config = Config(**{k: float(v.get()) for k, v in self.setting_vars.items()})
         except (tk.TclError, ValueError) as e:
-            messagebox.showerror("auto-cut", f"Invalid setting value:\n{e}")
+            messagebox.showerror("auto-cut", f"잘못된 설정 값:\n{e}")
             return
 
         self.run_btn.configure(state="disabled")
-        self.status.set("Running...")
-        self._append_log(f"\n=== Run: {Path(video).name} ===")
+        self.status.set("실행 중...")
+        self._append_log(f"\n=== 실행: {Path(video).name} ===")
 
         def log(msg: str) -> None:
             self.log_queue.put(msg)
@@ -257,7 +257,7 @@ class App(tk.Tk):
             try:
                 run_pipeline(Path(video), Path(output), config, log=log)
             except Exception as e:  # noqa: BLE001
-                log(f"ERROR: {e}")
+                log(f"오류: {e}")
             finally:
                 self.log_queue.put(None)
 

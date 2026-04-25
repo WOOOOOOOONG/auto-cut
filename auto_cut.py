@@ -19,6 +19,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -226,6 +229,28 @@ class Config:
     fps_override: float | None = None
 
 
+@contextmanager
+def _ticker(log, label: str, interval: float = 5.0):
+    """While the wrapped block runs, periodically log elapsed time."""
+    stop = threading.Event()
+    start = time.time()
+
+    def run():
+        while not stop.wait(interval):
+            elapsed = int(time.time() - start)
+            mm, ss = divmod(elapsed, 60)
+            stamp = f"{mm}분 {ss}초" if mm else f"{ss}초"
+            log(f"      \u21b3 {label}: {stamp} 경과...")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+
+
 def run_pipeline(
     video: Path,
     output: Path,
@@ -237,23 +262,25 @@ def run_pipeline(
     `log` is called with a single string per progress message; pass a
     custom callable from a GUI to capture output.
     """
-    log(f"[1/5] Probing {video.name}...")
+    log(f"[1/5] 영상 분석 중: {video.name}")
     duration, fps = probe(video)
     if config.fps_override:
         fps = config.fps_override
-    log(f"      duration={duration:.1f}s  fps={fps:.3f}")
+    log(f"      길이 {duration:.1f}초 / fps {fps:.3f}")
 
-    log("[2/5] Extracting audio + RMS...")
-    rms = extract_audio_rms(video)
-    log(f"      windows={len(rms)}  mean={rms.mean():.4f}  max={rms.max():.4f}")
+    log("[2/5] 오디오 추출\u00b7RMS 계산 중...")
+    with _ticker(log, "오디오 분석"):
+        rms = extract_audio_rms(video)
+    log(f"      윈도우 {len(rms)}개  평균 {rms.mean():.4f}  최대 {rms.max():.4f}")
 
-    log("[3/5] Detecting combat regions...")
+    log("[3/5] 교전 구간 감지 중...")
     regions = detect_combat_regions(rms, config.rms_percentile, config.min_loud)
-    log(f"      {len(regions)} regions")
+    log(f"      {len(regions)}개 구간")
 
-    log("[4/5] Detecting scene boundaries...")
-    scenes = get_scene_bounds(video, config.scene_threshold)
-    log(f"      {len(scenes)} scenes")
+    log("[4/5] 장면 전환 감지 중... (영상 길이에 따라 수십 초~수 분 소요)")
+    with _ticker(log, "장면 감지"):
+        scenes = get_scene_bounds(video, config.scene_threshold)
+    log(f"      {len(scenes)}개 장면")
 
     clips = clip_to_scenes(regions, scenes, duration)
     clips = merge_close(clips, config.merge_gap)
@@ -262,10 +289,10 @@ def run_pipeline(
     clips = trim_to_target(clips, config.target_minutes * 60.0)
 
     total = sum(c.duration for c in clips)
-    log(f"[5/5] {len(clips)} clips, total {total/60:.1f} min")
+    log(f"[5/5] 클립 {len(clips)}개 / 총 {total/60:.1f}분")
 
     write_edl(clips, video, fps, output)
-    log(f"      → {output}")
+    log(f"      \u2192 저장: {output}")
 
     return {
         "clips": len(clips),
