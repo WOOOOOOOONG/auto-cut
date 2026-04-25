@@ -116,6 +116,8 @@ class App(tk.Tk):
         self.script_edl_var = tk.StringVar()
         self.script_past_dir_var = tk.StringVar()
         self.script_output_var = tk.StringVar()
+        self.script_fmt_notion = tk.BooleanVar(value=True)
+        self.script_fmt_srt = tk.BooleanVar(value=True)
 
         # Shared
         self.log_queue: queue.Queue[str | None] = queue.Queue()
@@ -227,9 +229,18 @@ class App(tk.Tk):
 
         row = ttk.Frame(parent)
         row.pack(fill="x", **pad)
-        ttk.Label(row, text="대본 출력 (.txt)", width=14).pack(side="left")
+        ttk.Label(row, text="출력 base 경로", width=14).pack(side="left")
         ttk.Entry(row, textvariable=self.script_output_var).pack(side="left", fill="x", expand=True, padx=4)
         ttk.Button(row, text="저장 위치...", command=self._pick_script_output).pack(side="left")
+
+        # Output format checkboxes
+        row = ttk.Frame(parent)
+        row.pack(fill="x", **pad)
+        ttk.Label(row, text="출력 형식", width=14).pack(side="left")
+        ttk.Checkbutton(row, text="노션용 마크다운 (.md)",
+                        variable=self.script_fmt_notion).pack(side="left", padx=8)
+        ttk.Checkbutton(row, text="SRT 자막 (.srt)",
+                        variable=self.script_fmt_srt).pack(side="left", padx=8)
 
         # Action buttons
         row = ttk.Frame(parent)
@@ -316,7 +327,7 @@ class App(tk.Tk):
             if edl.exists():
                 self.script_edl_var.set(str(edl))
         if not self.script_output_var.get():
-            self.script_output_var.set(str(Path(path).with_name(Path(path).stem + "_script.txt")))
+            self.script_output_var.set(str(Path(path).with_name(Path(path).stem + "_script")))
 
     def _pick_script_edl(self) -> None:
         path = filedialog.askopenfilename(
@@ -333,11 +344,15 @@ class App(tk.Tk):
 
     def _pick_script_output(self) -> None:
         path = filedialog.asksaveasfilename(
-            title="대본 저장 위치", defaultextension=".txt",
-            filetypes=[("Text", "*.txt"), ("All files", "*.*")],
+            title="대본 저장 base 경로 (확장자 자동 추가)",
+            filetypes=[("All files", "*.*")],
         )
         if path:
-            self.script_output_var.set(path)
+            # Strip extension if user typed one (the formats add .md/.srt)
+            p = Path(path)
+            if p.suffix in (".md", ".srt", ".txt"):
+                p = p.with_suffix("")
+            self.script_output_var.set(str(p))
 
     def _open_dir(self, path: str) -> None:
         if not path:
@@ -498,8 +513,13 @@ class App(tk.Tk):
             messagebox.showerror("auto-cut", "EDL 파일을 다시 확인하세요.")
             return
         if not output:
-            output = str(Path(video).with_name(Path(video).stem + "_script.txt"))
+            output = str(Path(video).with_name(Path(video).stem + "_script"))
             self.script_output_var.set(output)
+
+        # At least one format must be selected
+        if not (self.script_fmt_notion.get() or self.script_fmt_srt.get()):
+            messagebox.showerror("auto-cut", "출력 형식을 하나 이상 선택하세요 (노션 또는 SRT).")
+            return
 
         # Quick dependency check
         if auto_script.check_claude() is None:
@@ -516,9 +536,11 @@ class App(tk.Tk):
         config = auto_script.ScriptConfig(
             video=Path(video),
             edl=Path(edl),
-            output=Path(output),
+            output_stem=Path(output),
             past_scripts_dir=Path(past_dir) if past_dir else None,
             video_context=context,
+            write_notion=self.script_fmt_notion.get(),
+            write_srt=self.script_fmt_srt.get(),
         )
 
         def worker() -> None:

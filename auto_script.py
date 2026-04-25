@@ -24,7 +24,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from auto_cut import _ticker, probe
+from auto_cut import NO_WINDOW, _ticker, probe
 
 
 # ---------- Data types ----------------------------------------------------
@@ -48,9 +48,11 @@ class Clip:
 class ScriptConfig:
     video: Path
     edl: Path
-    output: Path
+    output_stem: Path                 # base path; .md / .srt appended
     past_scripts_dir: Path | None
     video_context: str
+    write_notion: bool = True
+    write_srt: bool = True
 
 
 # ---------- EDL parsing ---------------------------------------------------
@@ -162,6 +164,7 @@ def check_node() -> str | None:
     try:
         r = subprocess.run(
             [exe, "--version"], capture_output=True, text=True, timeout=5,
+            creationflags=NO_WINDOW,
         )
         if r.returncode == 0:
             return r.stdout.strip()
@@ -178,7 +181,7 @@ def check_claude() -> str | None:
     try:
         r = subprocess.run(
             [exe, "--version"], capture_output=True, text=True, timeout=10,
-            shell=(os.name == "nt"),
+            shell=(os.name == "nt"), creationflags=NO_WINDOW,
         )
         if r.returncode == 0:
             return r.stdout.strip()
@@ -200,6 +203,7 @@ def install_nodejs(log) -> bool:
                 "--silent",
             ],
             capture_output=True, text=True, timeout=900,
+            creationflags=NO_WINDOW,
         )
         out = (r.stdout or "") + (r.stderr or "")
         for line in out.splitlines()[-15:]:
@@ -226,7 +230,7 @@ def install_claude_code(log) -> bool:
         r = subprocess.run(
             [npm, "install", "-g", "@anthropic-ai/claude-code"],
             capture_output=True, text=True, timeout=600,
-            shell=(os.name == "nt"),
+            shell=(os.name == "nt"), creationflags=NO_WINDOW,
         )
         out = (r.stdout or "") + (r.stderr or "")
         for line in out.splitlines()[-15:]:
@@ -254,6 +258,7 @@ def extract_keyframe(video: Path, time_sec: float, output: Path) -> bool:
                 "-y", "-v", "error", str(output),
             ],
             check=True, capture_output=True, timeout=30,
+            creationflags=NO_WINDOW,
         )
         return output.exists() and output.stat().st_size > 0
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -368,6 +373,7 @@ def call_claude(prompt: str, log=print, timeout: int = 1800) -> str:
         text=True,
         encoding="utf-8",
         shell=(os.name == "nt"),
+        creationflags=NO_WINDOW,
     )
     try:
         stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
@@ -393,6 +399,8 @@ def parse_response(text: str, clips: list[Clip]) -> list[dict]:
             "num": c.num,
             "src_in": c.src_in,
             "src_out": c.src_out,
+            "rec_in": c.rec_in,
+            "rec_out": c.rec_out,
             "duration": c.duration,
             "line": matches.get(c.num, "(대본 누락)"),
         }
@@ -400,16 +408,54 @@ def parse_response(text: str, clips: list[Clip]) -> list[dict]:
     ]
 
 
-def write_script_file(items: list[dict], video_name: str, output: Path) -> None:
-    lines = [f"# 자동 생성 대본 — {video_name}", ""]
+# ---------- Output formats ------------------------------------------------
+
+
+def write_notion(items: list[dict], video_name: str, output: Path) -> None:
+    """Notion-friendly markdown.
+
+    H1 title, H3 per cut with timecode, blockquote for the line.
+    Pastes into Notion as proper heading + callout blocks.
+    """
+    lines = [f"# {video_name} — 자동 생성 대본", "", "---", ""]
     for it in items:
         lines.append(
-            f"## [CUT {it['num']}] {format_tc(it['src_in'])} ~ "
-            f"{format_tc(it['src_out'])}  ({it['duration']:.1f}s)"
+            f"### 컷 {it['num']} · {format_tc(it['src_in'])} ~ "
+            f"{format_tc(it['src_out'])} ({it['duration']:.1f}s)"
         )
-        lines.append(it["line"])
+        lines.append("")
+        for body_line in it["line"].splitlines() or [""]:
+            lines.append(f"> {body_line}")
         lines.append("")
     output.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _srt_tc(seconds: float) -> str:
+    """SRT timestamp: HH:MM:SS,mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    rem = seconds - h * 3600 - m * 60
+    s = int(rem)
+    ms = int(round((rem - s) * 1000))
+    if ms == 1000:
+        s += 1
+        ms = 0
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def write_srt(items: list[dict], output: Path) -> None:
+    """SRT subtitles using rec timecodes (timeline position).
+
+    Drop into the edited Resolve timeline as a Subtitles track.
+    """
+    blocks = []
+    for i, it in enumerate(items, start=1):
+        blocks.append(
+            f"{i}\n"
+            f"{_srt_tc(it['rec_in'])} --> {_srt_tc(it['rec_out'])}\n"
+            f"{it['line']}\n"
+        )
+    output.write_text("\n".join(blocks), encoding="utf-8")
 
 
 # ---------- Top-level pipeline -------------------------------------------
@@ -443,11 +489,29 @@ def run_script_pipeline(config: ScriptConfig, log=print) -> dict:
 
         log("[5/5] 대본 저장 중...")
         items = parse_response(response, clips)
-        write_script_file(items, config.video.name, config.output)
-        log(f"      → 저장: {config.output}")
+        stem = config.output_stem
+        if stem.suffix:
+            stem = stem.with_suffix("")
+        written: list[str] = []
+        if config.write_notion:
+            md_path = stem.with_suffix(".md")
+            write_notion(items, config.video.name, md_path)
+            log(f"      → 노션 마크다운: {md_path}")
+            written.append(str(md_path))
+        if config.write_srt:
+            srt_path = stem.with_suffix(".srt")
+            write_srt(items, srt_path)
+            log(f"      → SRT 자막   : {srt_path}")
+            written.append(str(srt_path))
+        if not written:
+            raise RuntimeError("출력 형식이 하나도 선택되지 않았습니다.")
+
+        ok = sum(1 for it in items if it["line"] != "(대본 누락)")
+        log("")
+        log(f"✓ 대본 생성 완료 — 컷 {len(clips)}개 중 {ok}개 멘트 작성, 파일 {len(written)}개 저장")
 
     return {
         "clips": len(clips),
-        "scripts_written": sum(1 for it in items if it["line"] != "(대본 누락)"),
-        "output": str(config.output),
+        "scripts_written": ok,
+        "outputs": written,
     }

@@ -43,7 +43,12 @@ class Clip:
         return self.end - self.start
 
 
+NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    if sys.platform == "win32" and "creationflags" not in kw:
+        kw["creationflags"] = NO_WINDOW
     return subprocess.run(cmd, check=True, capture_output=True, **kw)
 
 
@@ -97,7 +102,10 @@ def extract_audio_rms(video: Path, window_sec: float = 1.0) -> np.ndarray:
         ]
     cmd += ["-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        creationflags=NO_WINDOW,
+    )
     raw = proc.stdout.read()
     proc.wait()
     if proc.returncode != 0:
